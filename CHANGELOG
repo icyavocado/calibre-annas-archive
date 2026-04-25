@@ -1,3 +1,7 @@
+## 0.2.5 - 2026-04-25
+
+- Bump version to 0.2.5; improvements: mirror health cache, parallel mirror probe, concurrent provider resolution, fix parsing and download-extension logic, CI release workflows and tests.
+
 ## Unreleased
 
 - Initial repository cleanup: move zip_release.sh logic into CI workflows
