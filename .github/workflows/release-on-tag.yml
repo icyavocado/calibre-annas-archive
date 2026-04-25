@@ -1,0 +1,169 @@
+name: Build and attach plugin zip on tag
+
+on:
+  push:
+    tags:
+      - 'v*'
+
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Set up Python
+        uses: actions/setup-python@v4
+        with:
+          python-version: '3.x'
+
+      - name: Generate changelog from commits
+        id: gen_changelog
+        run: |
+          git fetch --tags --prune --unshallow || true
+          prev_tag=$(git tag --sort=-creatordate | head -n1 || true)
+          if [ -n "$prev_tag" ]; then
+            commits=$(git log --pretty=format:'- %s (%an)' --no-merges "$prev_tag"..HEAD || true)
+          else
+            commits=$(git log --pretty=format:'- %s (%an)' --no-merges HEAD || true)
+          fi
+          date=$(date -u +%Y-%m-%d)
+          header="## ${{ github.ref_name }} - $date"
+          existing=$(cat CHANGELOG 2>/dev/null || true)
+          printf "%s\n\n%s\n\n%s\n" "$header" "$commits" "$existing" > CHANGELOG
+
+      - name: Save generated changelog
+        run: |
+          cp CHANGELOG /tmp/CHANGELOG_GENERATED
+
+      - name: Build plugin zip and checksum
+        id: build
+        run: |
+          python - <<'PY' > /tmp/zipinfo.txt
+          import ast, pathlib, zipfile, sys, hashlib
+
+          root = pathlib.Path('.').resolve()
+          init = root / '__init__.py'
+          if not init.exists():
+              print('__init__.py not found', file=sys.stderr)
+              sys.exit(1)
+
+          src = init.read_text(encoding='utf8')
+          module = ast.parse(src)
+          version = None
+          for node in module.body:
+              if isinstance(node, ast.Assign):
+                  for target in node.targets:
+                      if getattr(target, 'id', None) == 'version':
+                          if isinstance(node.value, ast.Tuple):
+                              parts = [str(int(e.n)) for e in node.value.elts]
+                              version = '.'.join(parts)
+          if not version:
+              print('version not found or invalid in __init__.py', file=sys.stderr)
+              sys.exit(1)
+
+          zip_name = f'calibre_annas_archive-v{version}.zip'
+          include = [
+              'README.md',
+              'plugin-import-name-store_annas_archive.txt',
+              '__init__.py',
+              'annas_archive.py',
+              'config.py',
+              'constants.py',
+              'LICENSE',
+              'CHANGELOG'
+          ]
+          missing = [p for p in include if not (root / p).exists()]
+          if missing:
+              print('Missing files, cannot build zip:', missing, file=sys.stderr)
+              sys.exit(1)
+
+          with zipfile.ZipFile(zip_name, 'w', compression=zipfile.ZIP_DEFLATED) as z:
+              for p in include:
+                  z.write(p)
+
+          # compute sha256
+          h = hashlib.sha256()
+          with open(zip_name, 'rb') as f:
+              for chunk in iter(lambda: f.read(8192), b''):
+                  h.update(chunk)
+          digest = h.hexdigest()
+          checksum_file = zip_name + '.sha256'
+          with open(checksum_file, 'w') as f:
+              f.write(digest + '  ' + zip_name + '\n')
+
+          print(zip_name)
+          print(digest)
+          PY
+
+          zipfile=$(awk 'NR==1{print $0}' /tmp/zipinfo.txt)
+          sha256=$(awk 'NR==2{print $0}' /tmp/zipinfo.txt)
+          echo "zip=$zipfile" >> $GITHUB_OUTPUT
+          echo "sha256=$sha256" >> $GITHUB_OUTPUT
+
+      - name: Create Release (if not exists)
+        id: create_release
+        uses: actions/create-release@v1
+        with:
+          tag_name: ${{ github.ref_name }}
+          release_name: ${{ github.ref_name }}
+          body: "Automated build for tag ${{ github.ref_name }}"
+          draft: false
+          prerelease: false
+
+      - name: Prepare branch for CHANGELOG PR
+        if: always()
+        uses: actions/checkout@v4
+        with:
+          ref: main
+          fetch-depth: 0
+
+      - name: Apply generated CHANGELOG and create PR
+        if: always()
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          set -e
+          BRANCH="chore/release-changelog-${GITHUB_REF_NAME}"
+          # copy generated changelog into workspace
+          cp /tmp/CHANGELOG_GENERATED CHANGELOG
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add CHANGELOG
+          if git diff --staged --quiet; then
+            echo "No CHANGELOG changes to commit"
+            exit 0
+          fi
+          git commit -m "chore(release): update CHANGELOG for ${GITHUB_REF_NAME}"
+          git push origin HEAD:refs/heads/${BRANCH}
+
+      - name: Create pull request for CHANGELOG
+        if: always()
+        uses: peter-evans/create-pull-request@v4
+        with:
+          token: ${{ secrets.GITHUB_TOKEN }}
+          commit-message: "chore(release): update CHANGELOG for ${{ github.ref_name }}"
+          title: "chore(release): update CHANGELOG for ${{ github.ref_name }}"
+          body: "Automated changelog update for ${{ github.ref_name }}"
+          base: main
+          branch: "chore/release-changelog-${{ github.ref_name }}"
+
+      - name: Upload release asset (zip)
+        uses: actions/upload-release-asset@v1
+        with:
+          upload_url: ${{ steps.create_release.outputs.upload_url }}
+          asset_path: ./calibre_annas_archive-v*.zip
+          asset_name: calibre_annas_archive-v${{ github.ref_name }}.zip
+          asset_content_type: application/zip
+
+      - name: Upload release asset (sha256)
+        uses: actions/upload-release-asset@v1
+        with:
+          upload_url: ${{ steps.create_release.outputs.upload_url }}
+          asset_path: ./calibre_annas_archive-v*.zip.sha256
+          asset_name: calibre_annas_archive-v${{ github.ref_name }}.zip.sha256
+          asset_content_type: text/plain

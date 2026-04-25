@@ -1,0 +1,114 @@
+name: Build plugin zip
+
+on:
+  push:
+    branches: [ main ]
+  workflow_dispatch: {}
+
+jobs:
+  build-zip:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Set up Python
+        uses: actions/setup-python@v4
+        with:
+          python-version: '3.x'
+
+      - name: Generate changelog
+        id: gen_changelog
+        run: |
+          # Ensure tags/history present
+          git fetch --tags --prune --unshallow || true
+
+          prev_tag=$(git tag --sort=-creatordate | head -n1 || true)
+          if [ -n "$prev_tag" ]; then
+            commits=$(git log --pretty=format:'- %s (%an)' --no-merges "$prev_tag"..HEAD || true)
+          else
+            commits=$(git log --pretty=format:'- %s (%an)' --no-merges HEAD || true)
+          fi
+          date=$(date -u +%Y-%m-%d)
+          header="## Unreleased - $date"
+          existing=$(cat CHANGELOG 2>/dev/null || true)
+          printf "%s\n\n%s\n\n%s\n" "$header" "$commits" "$existing" > CHANGELOG
+
+      - name: Build plugin zip and checksum
+        id: build
+        run: |
+          python - <<'PY' > /tmp/zipinfo.txt
+          import ast, pathlib, zipfile, sys, hashlib
+
+          root = pathlib.Path('.').resolve()
+          init = root / '__init__.py'
+          if not init.exists():
+              print('__init__.py not found', file=sys.stderr)
+              sys.exit(1)
+
+          src = init.read_text(encoding='utf8')
+          module = ast.parse(src)
+          version = None
+          for node in module.body:
+              if isinstance(node, ast.Assign):
+                  for target in node.targets:
+                      if getattr(target, 'id', None) == 'version':
+                          if isinstance(node.value, ast.Tuple):
+                              parts = [str(int(e.n)) for e in node.value.elts]
+                              version = '.'.join(parts)
+          if not version:
+              print('version not found or invalid in __init__.py', file=sys.stderr)
+              sys.exit(1)
+
+          zip_name = f'calibre_annas_archive-v{version}.zip'
+          include = [
+              'README.md',
+              'plugin-import-name-store_annas_archive.txt',
+              '__init__.py',
+              'annas_archive.py',
+              'config.py',
+              'constants.py',
+              'LICENSE',
+              'CHANGELOG'
+          ]
+          missing = [p for p in include if not (root / p).exists()]
+          if missing:
+              print('Missing files, cannot build zip:', missing, file=sys.stderr)
+              sys.exit(1)
+
+          with zipfile.ZipFile(zip_name, 'w', compression=zipfile.ZIP_DEFLATED) as z:
+              for p in include:
+                  z.write(p)
+
+          # compute sha256
+          h = hashlib.sha256()
+          with open(zip_name, 'rb') as f:
+              for chunk in iter(lambda: f.read(8192), b''):
+                  h.update(chunk)
+          digest = h.hexdigest()
+          checksum_file = zip_name + '.sha256'
+          with open(checksum_file, 'w') as f:
+              f.write(digest + '  ' + zip_name + '\n')
+
+          print(zip_name)
+          print(digest)
+          PY
+
+          zipfile=$(awk 'NR==1{print $0}' /tmp/zipinfo.txt)
+          sha256=$(awk 'NR==2{print $0}' /tmp/zipinfo.txt)
+          echo "zip=$zipfile" >> $GITHUB_OUTPUT
+          echo "sha256=$sha256" >> $GITHUB_OUTPUT
+
+      - name: Upload zip artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: plugin-zip
+          path: ${{ steps.build.outputs.zip }}
+
+      - name: Upload checksum artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: plugin-zip-checksum
+          path: ${{ steps.build.outputs.sha256 }}

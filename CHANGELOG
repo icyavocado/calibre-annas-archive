@@ -1,0 +1,3 @@
+## Unreleased
+
+- Initial repository cleanup: move zip_release.sh logic into CI workflows
