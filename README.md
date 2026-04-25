@@ -17,10 +17,8 @@ You could also install it from the source by cloning this repository and running
 ```shell
 calibre-customize -b <path to cloned repo>
 ```
-or if you're on Linux, you can run the shell script to create the zip file and then add that:
-```shell
-./zip_release.sh && calibre-customize -a $(ls calibre_annas_archive-v*.zip -1rt | tail -n1)
-```
+
+Releases are produced by GitHub Actions. To install from a release, download latest zip from Releases page and load via `Preferences > Plugins > Load plugin from file`.
 ## Configuration
 You can change configuration by going to 
 `Preferences > Plugins > Store` and scrolling down to and double-clicking `Anna's Archive (x.x.x) by icyavocado`
