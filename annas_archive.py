@@ -5,6 +5,8 @@ from typing import Generator
 from urllib.error import HTTPError, URLError
 from urllib.parse import quote_plus
 from urllib.request import urlopen, Request
+import time
+import concurrent.futures
 
 from calibre import browser
 from calibre.gui2 import open_url
@@ -34,16 +36,33 @@ class AnnasArchiveStore(StorePlugin):
         counter = max_results
 
         for page in range(1, ceil(max_results / RESULTS_PER_PAGE) + 1):
-            mirrors = self.config.get('mirrors', DEFAULT_MIRRORS)
+            # copy mirrors from config to avoid mutating stored config
+            mirrors = list(self.config.get('mirrors', DEFAULT_MIRRORS))
+            # prefer last working mirror by trying it first
             if self.working_mirror is not None:
-                mirrors.remove(self.working_mirror)
+                if self.working_mirror in mirrors:
+                    mirrors.remove(self.working_mirror)
                 mirrors.insert(0, self.working_mirror)
+
+            # reorder mirrors by cached health and probe unknown/stale mirrors in parallel
+            try:
+                mirrors = self._order_mirrors(mirrors, timeout)
+            except Exception:
+                # on any probe error, fall back to original order
+                pass
+
             for mirror in mirrors:
-                with closing(br.open(url.format(base=mirror, page=page), timeout=timeout)) as resp:
-                    if resp.code < 500 or resp.code > 599:
+                try:
+                    with closing(br.open(url.format(base=mirror, page=page), timeout=timeout)) as resp:
+                        # skip server 5xx errors
+                        if 500 <= getattr(resp, 'code', 0) <= 599:
+                            continue
                         self.working_mirror = mirror
                         doc = html.fromstring(resp.read())
                         break
+                except (HTTPError, URLError, TimeoutError, RemoteDisconnected, OSError):
+                    # try next mirror on network/error
+                    continue
             if doc is None:
                 self.working_mirror = None
                 raise Exception('No working mirrors of Anna\'s Archive found.')
@@ -54,6 +73,9 @@ class AnnasArchiveStore(StorePlugin):
                     break
 
                 columns = book.findall("td")
+                # guard against unexpected table layout
+                if len(columns) < 10:
+                    continue
                 s = SearchResult()
 
                 cover = columns[0].xpath('./a[@tabindex="-1"]')
@@ -113,25 +135,57 @@ class AnnasArchiveStore(StorePlugin):
         url_extension = link_opts.get('url_extension', True)
         content_type = link_opts.get('content_type', False)
 
-        br = browser()
-        with closing(br.open(self._get_url(search_result.detail_item), timeout=timeout)) as f:
+        # fetch detail page
+        with closing(urlopen(Request(self._get_url(search_result.detail_item)), timeout=timeout)) as f:
             doc = html.fromstring(f.read())
 
-        for link in doc.xpath('//div[@id="md5-panel-downloads"]/ul[contains(@class, "list-inside")]/li/a[contains(@class, "js-download-link")]'):
+        links = doc.xpath('//div[@id="md5-panel-downloads"]/ul[contains(@class, "list-inside")]/li/a[contains(@class, "js-download-link")]')
+
+        def resolve_provider(link):
             url = link.get('href')
             link_text = ''.join(link.itertext())
+            if not url:
+                return link_text, None
 
-            if link_text == 'Libgen.li':
-                url = self._get_libgen_link(url, br)
-            elif link_text == 'Libgen.rs Fiction' or link_text == 'Libgen.rs Non-Fiction':
-                url = self._get_libgen_nonfiction_link(url, br)
-            elif link_text.startswith('Sci-Hub'):
-                url = self._get_scihub_link(url, br)
-            elif link_text == 'Z-Library':
-                url = self._get_zlib_link(url, br)
-            else:
-                continue
+            try:
+                if link_text == 'Libgen.li':
+                    with closing(urlopen(Request(url), timeout=timeout)) as resp:
+                        doc2 = html.fromstring(resp.read())
+                        scheme, _, host, _ = resp.geturl().split('/', 3)
+                    found = ''.join(doc2.xpath('//a[h2[text()="GET"]]/@href'))
+                    return link_text, (f"{scheme}//{host}/{found}" if found else None)
+                if link_text == 'Libgen.rs Fiction' or link_text == 'Libgen.rs Non-Fiction':
+                    with closing(urlopen(Request(url), timeout=timeout)) as resp:
+                        doc2 = html.fromstring(resp.read())
+                    found = ''.join(doc2.xpath('//h2/a[text()="GET"]/@href'))
+                    return link_text, (found if found else None)
+                if link_text.startswith('Sci-Hub'):
+                    with closing(urlopen(Request(url), timeout=timeout)) as resp:
+                        doc2 = html.fromstring(resp.read())
+                        scheme, _ = resp.geturl().split('/', 1)
+                    found = ''.join(doc2.xpath('//embed[@id="pdf"]/@src'))
+                    return link_text, (scheme + found if found else None)
+                if link_text == 'Z-Library':
+                    with closing(urlopen(Request(url), timeout=timeout)) as resp:
+                        doc2 = html.fromstring(resp.read())
+                        scheme, _, host, _ = resp.geturl().split('/', 3)
+                    found = ''.join(doc2.xpath('//a[contains(@class, "addDownloadedBook")]/@href'))
+                    return link_text, (f"{scheme}//{host}/{found}" if found else None)
+            except Exception:
+                return link_text, None
+            return link_text, None
 
+        # resolve provider links concurrently
+        resolved = {}
+        if links:
+            with concurrent.futures.ThreadPoolExecutor(max_workers=min(6, len(links))) as ex:
+                futures = {ex.submit(resolve_provider, link): link for link in links}
+                for fut in concurrent.futures.as_completed(futures):
+                    link_text, resolved_url = fut.result()
+                    if resolved_url:
+                        resolved[link_text] = resolved_url
+
+        for link_text, url in resolved.items():
             if not url:
                 continue
 
@@ -142,15 +196,15 @@ class AnnasArchiveStore(StorePlugin):
                         if resp.info().get_content_maintype() != 'application':
                             continue
                 except (HTTPError, URLError, TimeoutError, RemoteDisconnected):
-                    pass
-            elif url_extension:
-                # Speeds it up by checking the extension of the url.
-                # Might miss a direct url that doesn't end with the extension
-                params = url.find("?")
-                if params < 0:
-                    params = None
-                if url.endswith(_format, 0, params):
+                    # if HEAD fails, skip content-type check and fall back to extension check if enabled
+                    if not url_extension:
+                        continue
+            if url_extension and not content_type:
+                # Speeds it up by checking the extension of the url. Strip query params first.
+                path = url.split('?', 1)[0]
+                if not path.lower().endswith(_format):
                     continue
+
             search_result.downloads[f"{link_text}.{search_result.formats}"] = url
 
     @staticmethod
@@ -188,6 +242,67 @@ class AnnasArchiveStore(StorePlugin):
 
     def _get_url(self, md5):
         return f"{self.working_mirror}/md5/{md5}"
+
+    def _order_mirrors(self, mirrors, timeout=10):
+        """Order mirrors by cached health then probe stale ones in parallel.
+
+        Returns ordered list with healthy mirrors first.
+        """
+        meta = self.config.get('mirror_meta', {})
+        now = int(time.time())
+
+        def score(m):
+            mmeta = meta.get(m, {})
+            # last_good gives higher score, last_bad penalises
+            last_good = mmeta.get('last_good', 0)
+            last_bad = mmeta.get('last_bad', 0)
+            age = now - last_good if last_good else 10**9
+            return (-last_good, last_bad)
+
+        # initial sort by score
+        mirrors_sorted = sorted(mirrors, key=score)
+
+        # probe up to 6 unknown/stale mirrors concurrently
+        to_probe = [m for m in mirrors_sorted if now - meta.get(m, {}).get('last_probe', 0) > 300]
+        to_probe = to_probe[:6]
+
+        def probe(m):
+            try:
+                req = Request(m, method='HEAD')
+                with closing(urlopen(req, timeout=timeout)) as resp:
+                    code = getattr(resp, 'code', 0)
+                    ok = not (500 <= code <= 599)
+            except Exception:
+                ok = False
+            # update meta
+            mm = meta.get(m, {})
+            mm['last_probe'] = int(time.time())
+            if ok:
+                mm['last_good'] = int(time.time())
+            else:
+                mm['last_bad'] = int(time.time())
+            meta[m] = mm
+            return m, ok
+
+        if to_probe:
+            with concurrent.futures.ThreadPoolExecutor(max_workers=min(6, len(to_probe))) as ex:
+                for fut in ex.map(probe, to_probe):
+                    m, ok = fut
+                    # nothing to do here; meta updated
+                    pass
+
+        # save meta back (do not overwrite other config keys)
+        self.config['mirror_meta'] = meta
+        try:
+            # attempt to save config if underlying store supports it
+            self.save_settings(self.config_widget())
+        except Exception:
+            # not fatal if we cannot persist now
+            pass
+
+        # final sort using last_good timestamp (recent good first)
+        mirrors_final = sorted(mirrors, key=lambda m: -meta.get(m, {}).get('last_good', 0))
+        return mirrors_final
 
     def config_widget(self):
         from calibre_plugins.store_annas_archive.config import ConfigWidget
