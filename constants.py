@@ -9,7 +9,7 @@ __all__ = (
     'FileType', 'Source', 'Language'
 )
 
-DEFAULT_MIRRORS = ['https://annas-archive.org', 'https://annas-archive.li', 'https://annas-archive.se']
+DEFAULT_MIRRORS = ['https://annas-archive.gl', 'https://annas-archive.li', 'https://annas-archive.se']
 RESULTS_PER_PAGE = 100
 
 

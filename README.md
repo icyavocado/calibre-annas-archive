@@ -2,7 +2,7 @@
 
 [![Build plugin zip](https://github.com/icyavocado/calibre-annas-archive/actions/workflows/build-zip.yml/badge.svg?branch=main)](https://github.com/icyavocado/calibre-annas-archive/actions/workflows/build-zip.yml)
 
-A [Calibre](https://calibre-ebook.com/) store plugin for [Anna's Archive](https://annas-archive.org/).
+  A [Calibre](https://calibre-ebook.com/) store plugin for [Anna's Archive](https://annas-archive.gl/).
 > 📚 The largest truly open library in human history.
 > ⭐️ We mirror Sci-Hub and LibGen. We scrape and open-source Z-Lib, DuXiu, and more.
 
