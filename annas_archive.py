@@ -3,7 +3,7 @@ from http.client import RemoteDisconnected
 from math import ceil
 from typing import Generator
 from urllib.error import HTTPError, URLError
-from urllib.parse import quote_plus
+from urllib.parse import quote_plus, urljoin, urlparse
 from urllib.request import urlopen, Request
 import time
 import concurrent.futures
@@ -139,40 +139,77 @@ class AnnasArchiveStore(StorePlugin):
         with closing(urlopen(Request(self._get_url(search_result.detail_item)), timeout=timeout)) as f:
             doc = html.fromstring(f.read())
 
-        links = doc.xpath('//div[@id="md5-panel-downloads"]/ul[contains(@class, "list-inside")]/li/a[contains(@class, "js-download-link")]')
+        # select all anchors under the downloads panel. Some mirrors/pages don't include
+        # the 'js-download-link' class server-side, so be permissive and filter later.
+        links = doc.xpath('//div[@id="md5-panel-downloads"]//a[@href]')
+
+        base_page_url = self._get_url(search_result.detail_item)
+
+        def find_download_in_doc(doc2, base2):
+            # prefer explicit links that end with expected format
+            for a in doc2.xpath('//a[@href]'):
+                href = a.get('href')
+                if not href:
+                    continue
+                full = urljoin(base2, href)
+                if full.split('?', 1)[0].lower().endswith(_format):
+                    return full
+
+            # prefer anchors with download/get text
+            for a in doc2.xpath('//a'):
+                text = ''.join(a.itertext()).strip().lower()
+                if 'get' in text or 'download' in text or 'direct' in text:
+                    href = a.get('href')
+                    if href:
+                        return urljoin(base2, href)
+
+            # forms with action
+            for form in doc2.xpath('//form[@action]'):
+                action = form.get('action')
+                if action:
+                    return urljoin(base2, action)
+
+            # meta refresh
+            meta = doc2.xpath('//meta[@http-equiv="refresh"]/@content')
+            if meta:
+                import re
+                m = re.search(r'url=(.*)', meta[0], re.I)
+                if m:
+                    return urljoin(base2, m.group(1).strip(' "\''))
+            return None
 
         def resolve_provider(link):
-            url = link.get('href')
-            link_text = ''.join(link.itertext())
-            if not url:
+            href = link.get('href')
+            link_text = ''.join(link.itertext()).strip()
+            if not href:
                 return link_text, None
 
+            abs_href = urljoin(base_page_url, href)
+
+            # quick accept: if link already points to a file or known download path
+            p = urlparse(abs_href)
+            # accept direct partner fast/slow download endpoints, libgen file.php or obvious download endpoints
+            if any(fragment in abs_href for fragment in ('file.php', 'ads.php', '/download', '/fast_download', '/slow_download', '/fast_download_not_member')):
+                return link_text, abs_href
+            if abs_href.split('?', 1)[0].lower().endswith(_format):
+                return link_text, abs_href
+
             try:
-                if link_text == 'Libgen.li':
-                    with closing(urlopen(Request(url), timeout=timeout)) as resp:
-                        doc2 = html.fromstring(resp.read())
-                        scheme, _, host, _ = resp.geturl().split('/', 3)
-                    found = ''.join(doc2.xpath('//a[h2[text()="GET"]]/@href'))
-                    return link_text, (f"{scheme}//{host}/{found}" if found else None)
-                if link_text == 'Libgen.rs Fiction' or link_text == 'Libgen.rs Non-Fiction':
-                    with closing(urlopen(Request(url), timeout=timeout)) as resp:
-                        doc2 = html.fromstring(resp.read())
-                    found = ''.join(doc2.xpath('//h2/a[text()="GET"]/@href'))
-                    return link_text, (found if found else None)
-                if link_text.startswith('Sci-Hub'):
-                    with closing(urlopen(Request(url), timeout=timeout)) as resp:
-                        doc2 = html.fromstring(resp.read())
-                        scheme, _ = resp.geturl().split('/', 1)
-                    found = ''.join(doc2.xpath('//embed[@id="pdf"]/@src'))
-                    return link_text, (scheme + found if found else None)
-                if link_text == 'Z-Library':
-                    with closing(urlopen(Request(url), timeout=timeout)) as resp:
-                        doc2 = html.fromstring(resp.read())
-                        scheme, _, host, _ = resp.geturl().split('/', 3)
-                    found = ''.join(doc2.xpath('//a[contains(@class, "addDownloadedBook")]/@href'))
-                    return link_text, (f"{scheme}//{host}/{found}" if found else None)
+                with closing(urlopen(Request(abs_href), timeout=timeout)) as resp:
+                    doc2 = html.fromstring(resp.read())
+                    base2 = resp.geturl()
+
+                    # first, try to find explicit download link
+                    found = find_download_in_doc(doc2, base2)
+                    if found:
+                        return link_text, found
+
+                    # fallback: if provider page redirects to a direct file
+                    if base2.split('?', 1)[0].lower().endswith(_format):
+                        return link_text, base2
             except Exception:
                 return link_text, None
+
             return link_text, None
 
         # resolve provider links concurrently
@@ -209,36 +246,61 @@ class AnnasArchiveStore(StorePlugin):
 
     @staticmethod
     def _get_libgen_link(url: str, br) -> str:
+        # Libgen pages can be various: try to prefer anchors with explicit GET or direct file links
         with closing(br.open(url)) as resp:
             doc = html.fromstring(resp.read())
-            scheme, _, host, _ = resp.geturl().split('/', 3)
-        url = ''.join(doc.xpath('//a[h2[text()="GET"]]/@href'))
-        return f"{scheme}//{host}/{url}"
+            base = resp.geturl()
+
+        # prefer anchors with class/js-download or with text 'GET' or direct file.php
+        candidates = doc.xpath('//a[contains(@class, "download") or contains(@class, "js-download") or contains(text(), "GET")]/@href')
+        if not candidates:
+            # fallback to links that include file.php or download
+            candidates = doc.xpath('//a[contains(@href, "file.php") or contains(@href, "download")]/@href')
+        if candidates:
+            href = candidates[0]
+            return urljoin(base, href)
+        return None
 
     @staticmethod
     def _get_libgen_nonfiction_link(url: str, br) -> str:
         with closing(br.open(url)) as resp:
             doc = html.fromstring(resp.read())
-        url = ''.join(doc.xpath('//h2/a[text()="GET"]/@href'))
-        return url
+            base = resp.geturl()
+
+        candidates = doc.xpath('//a[contains(@class, "js-download") or contains(text(), "GET")]/@href')
+        if not candidates:
+            candidates = doc.xpath('//h2/a[text()="GET"]/@href')
+        if candidates:
+            return urljoin(base, candidates[0])
+        return None
 
     @staticmethod
     def _get_scihub_link(url, br):
         with closing(br.open(url)) as resp:
             doc = html.fromstring(resp.read())
-            scheme, _ = resp.geturl().split('/', 1)
-        url = ''.join(doc.xpath('//embed[@id="pdf"]/@src'))
-        if url:
-            return scheme + url
+            base = resp.geturl()
+
+        # Sci-Hub sometimes embeds the PDF or provides a direct link
+        src = ''.join(doc.xpath('//embed[@id="pdf"]/@src | //iframe[contains(@src, "pdf")]/@src | //a[contains(@href, ".pdf")]/@href'))
+        if src:
+            return urljoin(base, src)
+        return None
 
     @staticmethod
     def _get_zlib_link(url, br):
         with closing(br.open(url)) as resp:
             doc = html.fromstring(resp.read())
-            scheme, _, host, _ = resp.geturl().split('/', 3)
-        url = ''.join(doc.xpath('//a[contains(@class, "addDownloadedBook")]/@href'))
-        if url:
-            return f"{scheme}//{host}/{url}"
+            base = resp.geturl()
+
+        # prefer anchors that add the book or direct download links
+        candidates = doc.xpath('//a[contains(@class, "addDownloadedBook") or contains(@class, "download") or contains(@href, "download")]/@href')
+        if candidates:
+            return urljoin(base, candidates[0])
+        # sometimes z-lib has a link with md5 param
+        candidates = doc.xpath('//a[contains(@href, "md5=")]/@href')
+        if candidates:
+            return urljoin(base, candidates[0])
+        return None
 
     def _get_url(self, md5):
         return f"{self.working_mirror}/md5/{md5}"
