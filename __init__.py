@@ -1,5 +1,9 @@
 from calibre.customize import StoreBase
 
+# Module-level version used by CI build scripts to name the release zip.
+# Keep in-sync with the class attribute below.
+version = (0, 2, 5)
+
 
 class AnnasArchiveStore(StoreBase):
     name                = 'Anna\'s Archive'
