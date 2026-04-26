@@ -1,14 +1,10 @@
-## 0.2.6 - 2026-04-26
-
-- Add optional on-disk HTTP cache for provider/detail pages (ANN_CACHE_DIR + ANN_CACHE_TTL).
-- Replace LICENSE with MIT and update package author to ScottBot10.
-- Fix CI build scripts (robust version parsing) and opt into Node.js 24 for JS-actions.
-- README badge adjustments and various parsing/UX fixes.
-
 ## 0.2.5 - 2026-04-25
 
 - Bump version to 0.2.5; improvements: mirror health cache, parallel mirror probe, concurrent provider resolution, fix parsing and download-extension logic, CI release workflows and tests.
 
 ## Unreleased
 
-*No unreleased changes.*
+- Add optional on-disk HTTP cache for provider/detail pages (ANN_CACHE_DIR + ANN_CACHE_TTL).
+- Replace LICENSE with MIT and update package author to ScottBot10.
+- Fix CI build scripts (robust version parsing) and opt into Node.js 24 for JS-actions.
+- README badge adjustments and various parsing/UX fixes.
