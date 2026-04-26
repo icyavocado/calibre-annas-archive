@@ -153,6 +153,5 @@ def test_get_details_resolves_provider_links():
 
     store.get_details(sr, timeout=5)
 
-    # expect both provider links to be resolved and stored
-    assert any(k.startswith('Libgen.li') for k in sr.downloads.keys())
-    assert any(k.startswith('Libgen.rs') for k in sr.downloads.keys())
+    # Downloads are intentionally hidden by the plugin (no provider links exposed).
+    assert not sr.downloads

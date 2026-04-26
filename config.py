@@ -6,16 +6,14 @@ from calibre_plugins.store_annas_archive.constants import (DEFAULT_MIRRORS, Sear
 try:
     from qt.core import (Qt, QWidget, QGridLayout, QVBoxLayout, QHBoxLayout, QLabel, QFrame, QGroupBox, QScrollArea,
                          QAbstractScrollArea, QComboBox, QCheckBox, QSizePolicy, QListWidget, QListWidgetItem,
-                         QAbstractItemView, QShortcut, QKeySequence)
+                         QAbstractItemView, QShortcut, QKeySequence, QApplication)
 except (ImportError, ModuleNotFoundError):
     from PyQt5.QtCore import Qt
     from PyQt5.QtWidgets import (QWidget, QGridLayout, QVBoxLayout, QHBoxLayout, QLabel, QFrame, QGroupBox, QScrollArea,
                                  QAbstractScrollArea, QComboBox, QCheckBox, QSizePolicy, QListWidget, QListWidgetItem,
                                  QAbstractItemView, QShortcut)
     from PyQt5.QtGui import QKeySequence
-
-load_translations()
-
+    from PyQt5.QtWidgets import QApplication
 
 class MirrorsList(QListWidget):
     def __init__(self, parent=...):
@@ -26,8 +24,10 @@ class MirrorsList(QListWidget):
         self._check_last_changed = False
         self.itemChanged.connect(self.add_mirror)
 
-        self.delete_pressed = QShortcut(QKeySequence(Qt.Key.Key_Delete), self)
-        self.delete_pressed.activated.connect(self.delete_item)
+        # Shortcut will be created by the parent ConfigWidget on the GUI thread.
+        # Avoid creating QShortcut here to prevent QBasicTimer errors when this
+        # widget is constructed off the main thread.
+        self.delete_pressed = None
 
     def delete_item(self):
         if self.currentRow() != self.count() - 1:
@@ -121,6 +121,19 @@ class ConfigWidget(QWidget):
         layout.addWidget(self.mirrors)
         horizontal_layout.addWidget(mirrors)
 
+        # create delete shortcut here on the GUI thread if possible
+        try:
+            # ensure QApplication exists and we're on GUI thread
+            app = QApplication.instance()
+            import threading as _threading
+            if app is not None and _threading.current_thread() is _threading.main_thread():
+                # safe to create shortcut
+                self.mirrors.delete_pressed = QShortcut(QKeySequence(Qt.Key.Key_Delete), self.mirrors)
+                self.mirrors.delete_pressed.activated.connect(self.mirrors.delete_item)
+        except Exception:
+            # best-effort: if this fails, we avoid creating a shortcut to prevent QBasicTimer errors
+            pass
+
         main_layout.addLayout(horizontal_layout)
 
         self.open_external = QCheckBox(_('Open store in external web browser'), self)
@@ -162,6 +175,16 @@ class ConfigWidget(QWidget):
             scroll_area.setWidget(cbx_parent)
             top_vertical.addWidget(scroll_area)
         return box
+
+    def showEvent(self, event):
+        # create deferred shortcut here if needed; showEvent runs on GUI thread
+        if getattr(self, '_create_shortcut', None):
+            try:
+                self._create_shortcut()
+            finally:
+                # remove attribute so we don't recreate
+                delattr(self, '_create_shortcut')
+        return super().showEvent(event)
 
     def load_settings(self):
         config = self.store.config
