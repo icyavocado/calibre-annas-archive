@@ -59,9 +59,19 @@ jobs:
               if isinstance(node, ast.Assign):
                   for target in node.targets:
                       if getattr(target, 'id', None) == 'version':
-                          if isinstance(node.value, ast.Tuple):
-                              parts = [str(int(e.n)) for e in node.value.elts]
-                              version = '.'.join(parts)
+                          try:
+                              val = ast.literal_eval(node.value)
+                              if isinstance(val, (list, tuple)):
+                                  version = '.'.join(str(int(x)) for x in val)
+                          except Exception:
+                              if isinstance(node.value, ast.Tuple):
+                                  parts = []
+                                  for e in node.value.elts:
+                                      v = getattr(e, 'n', None)
+                                      if v is None:
+                                          v = getattr(e, 'value', None)
+                                      parts.append(str(int(v)))
+                                  version = '.'.join(parts)
           if not version:
               print('version not found or invalid in __init__.py', file=sys.stderr)
               sys.exit(1)
