@@ -18,6 +18,9 @@ jobs:
         uses: actions/setup-python@v4
         with:
           python-version: '3.x'
+        env:
+          # Opt into Node.js 24 for javascript-based actions run during this workflow
+          FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: 'true'
 
       - name: Generate changelog
         id: gen_changelog
