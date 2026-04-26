@@ -7,7 +7,10 @@
 - Hide provider download links in UI to avoid triggering anti-bot protections and 403s.
 - Remove provider-page fetching and helper resolvers; expose no provider anchors by default.
 - Increment version to 0.2.6 and update tests accordingly.
+## 0.2.7 - 2026-04-26
+
+- Patch release: bump version to 0.2.7 (packaging/test changes only).
 
 ## Unreleased
 
- - Minor fixes and maintenance.
+- Minor fixes and maintenance.
