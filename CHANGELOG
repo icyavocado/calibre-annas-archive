@@ -2,9 +2,12 @@
 
 - Bump version to 0.2.5; improvements: mirror health cache, parallel mirror probe, concurrent provider resolution, fix parsing and download-extension logic, CI release workflows and tests.
 
+## 0.2.6 - 2026-04-26
+
+- Hide provider download links in UI to avoid triggering anti-bot protections and 403s.
+- Remove provider-page fetching and helper resolvers; expose no provider anchors by default.
+- Increment version to 0.2.6 and update tests accordingly.
+
 ## Unreleased
 
-- Add optional on-disk HTTP cache for provider/detail pages (ANN_CACHE_DIR + ANN_CACHE_TTL).
-- Replace LICENSE with MIT and update package author to ScottBot10.
-- Fix CI build scripts (robust version parsing) and opt into Node.js 24 for JS-actions.
-- README badge adjustments and various parsing/UX fixes.
+ - Minor fixes and maintenance.
