@@ -1,6 +1,6 @@
-# [Anna's Archive Calibre Store](https://github.com/icyavocado/calibre-annas-archive)
+# [Anna's Archive Calibre Store](https://github.com/ScottBot10/calibre_annas_archive)
 
-[![Build plugin zip](https://github.com/icyavocado/calibre-annas-archive/actions/workflows/build-zip.yml/badge.svg?branch=main)](https://github.com/icyavocado/calibre-annas-archive/actions/workflows/build-zip.yml)
+[![Build plugin zip](https://github.com/ScottBot10/calibre_annas_archive/actions/workflows/build-zip.yml/badge.svg?branch=main)](https://github.com/ScottBot10/calibre_annas_archive/actions/workflows/build-zip.yml)
 
   A [Calibre](https://calibre-ebook.com/) store plugin for [Anna's Archive](https://annas-archive.gl/).
 > 📚 The largest truly open library in human history.
@@ -8,7 +8,7 @@
 
 ## Installation
 ### From Releases
-To add this plugin, go to the latest [release](https://github.com/icyavocado/calibre-annas-archive/releases)
+To add this plugin, go to the latest [release](https://github.com/ScottBot10/calibre_annas_archive/releases)
 and download the file that looks like `calibre_annas_archive-vx.x.x.zip` where the x's are the version number, 
     then in Calibre go to `Preferences > Plugins`, click `Load plugin from file` and select your downloaded zip file.
 
@@ -21,7 +21,7 @@ calibre-customize -b <path to cloned repo>
 Releases are produced by GitHub Actions. To install from a release, download latest zip from Releases page and load via `Preferences > Plugins > Load plugin from file`.
 ## Configuration
 You can change configuration by going to 
-`Preferences > Plugins > Store` and scrolling down to and double-clicking `Anna's Archive (x.x.x) by icyavocado`
+`Preferences > Plugins > Store` and scrolling down to and double-clicking `Anna's Archive (x.x.x) by ScottBot10`
 to open the settings menu.
 
 ### Search Options
