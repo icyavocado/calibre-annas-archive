@@ -128,6 +128,7 @@ jobs:
         id: create_release_main
         uses: actions/create-release@v1
         with:
+          token: ${{ secrets.GITHUB_TOKEN }}
           tag_name: "v${{ steps.build.outputs.zip | fromJson | toString }}-dev-$(date +%s)"
           release_name: "Automated build ${{ github.sha }}"
           body: "Automated build from main branch"
