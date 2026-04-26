@@ -1,6 +1,6 @@
 # [Anna's Archive Calibre Store](https://github.com/ScottBot10/calibre_annas_archive)
 
-[![Build plugin zip](https://github.com/ScottBot10/calibre_annas-archive/actions/workflows/build-zip.yml/badge.svg?branch=main)](https://github.com/ScottBot10/calibre-annas-archive/actions/workflows/build-zip.yml)
+[![Build plugin zip](https://github.com/icyavocado/calibre-annas-archive/actions/workflows/build-zip.yml/badge.svg?branch=main)](https://github.com/icyavocado/calibre-annas-archive/actions/workflows/build-zip.yml)
 
   A [Calibre](https://calibre-ebook.com/) store plugin for [Anna's Archive](https://annas-archive.gl/).
 > 📚 The largest truly open library in human history.
