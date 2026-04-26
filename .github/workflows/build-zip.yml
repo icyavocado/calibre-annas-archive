@@ -116,6 +116,42 @@ jobs:
           echo "zip=$zipfile" >> $GITHUB_OUTPUT
           echo "sha256=$sha256" >> $GITHUB_OUTPUT
 
+      - name: Create Release draft and upload assets
+        if: github.ref == 'refs/heads/main'
+        uses: softprops/turnstyle@v2
+        with:
+          lock-name: "build-and-release"
+        id: turnstyle
+
+      - name: Create Release (main branch)
+        if: github.ref == 'refs/heads/main' && steps.turnstyle.outputs.lock_acquired == 'true'
+        id: create_release_main
+        uses: actions/create-release@v1
+        with:
+          tag_name: "v${{ steps.build.outputs.zip | fromJson | toString }}-dev-$(date +%s)"
+          release_name: "Automated build ${{ github.sha }}"
+          body: "Automated build from main branch"
+          draft: true
+          prerelease: false
+
+      - name: Upload zip artifact to draft release
+        if: github.ref == 'refs/heads/main' && steps.turnstyle.outputs.lock_acquired == 'true'
+        uses: actions/upload-release-asset@v1
+        with:
+          upload_url: ${{ steps.create_release_main.outputs.upload_url }}
+          asset_path: ${{ steps.build.outputs.zip }}
+          asset_name: ${{ steps.build.outputs.zip }}
+          asset_content_type: application/zip
+
+      - name: Upload sha256 to draft release
+        if: github.ref == 'refs/heads/main' && steps.turnstyle.outputs.lock_acquired == 'true'
+        uses: actions/upload-release-asset@v1
+        with:
+          upload_url: ${{ steps.create_release_main.outputs.upload_url }}
+          asset_path: "${{ steps.build.outputs.zip }}.sha256"
+          asset_name: "${{ steps.build.outputs.zip }}.sha256"
+          asset_content_type: text/plain
+
       - name: Upload zip artifact
         uses: actions/upload-artifact@v4
         with:
