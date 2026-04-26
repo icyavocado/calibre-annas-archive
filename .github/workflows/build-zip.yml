@@ -129,7 +129,8 @@ jobs:
         uses: actions/create-release@v1
         with:
           token: ${{ secrets.GITHUB_TOKEN }}
-          tag_name: "v${{ steps.build.outputs.zip | fromJson | toString }}-dev-$(date +%s)"
+          # Use a deterministic tag-name for draft releases created from main branch
+          tag_name: "build-${{ github.run_number }}"
           release_name: "Automated build ${{ github.sha }}"
           body: "Automated build from main branch"
           draft: true
