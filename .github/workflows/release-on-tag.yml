@@ -43,7 +43,8 @@ jobs:
         run: |
           cp CHANGELOG /tmp/CHANGELOG_GENERATED
           # expose generated changelog as a step output for use in the Create Release step
-          echo "changelog<<'EOF'" >> $GITHUB_OUTPUT
+          # Note: the delimiter must match exactly; do not quote the EOF marker here.
+          echo "changelog<<EOF" >> $GITHUB_OUTPUT
           cat /tmp/CHANGELOG_GENERATED >> $GITHUB_OUTPUT
           echo "EOF" >> $GITHUB_OUTPUT
 
