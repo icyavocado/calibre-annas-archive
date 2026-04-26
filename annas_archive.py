@@ -4,7 +4,15 @@ from math import ceil
 from typing import Generator
 from urllib.error import HTTPError, URLError
 from urllib.parse import quote_plus, urljoin, urlparse
-from urllib.request import urlopen, Request
+from urllib.request import urlopen as _raw_urlopen, Request
+import os
+import sqlite3
+import hashlib
+import pickle
+import io
+import threading
+from email.message import Message
+import json
 import time
 import concurrent.futures
 
@@ -21,6 +29,8 @@ try:
 except (ImportError, ModuleNotFoundError):
     from PyQt5.Qt import QUrl
 
+# expose a module-level urlopen alias so tests can patch annas_archive.urlopen
+urlopen = _raw_urlopen
 SearchResults = Generator[SearchResult, None, None]
 
 
@@ -29,6 +39,19 @@ class AnnasArchiveStore(StorePlugin):
     def __init__(self, gui, name, config=None, base_plugin=None):
         super().__init__(gui, name, config, base_plugin)
         self.working_mirror = None
+        # setup simple on-disk HTTP cache for provider / detail page responses
+        # cache is optional and controlled by env var ANN_CACHE_DIR; if unset no caching
+        cache_dir = os.environ.get('ANN_CACHE_DIR')
+        if cache_dir:
+            os.makedirs(cache_dir, exist_ok=True)
+        self._cache_dir = cache_dir
+        # TTL for cache entries in seconds. If 0 or unset, entries never expire.
+        try:
+            self._cache_ttl = int(os.environ.get('ANN_CACHE_TTL', '0'))
+        except Exception:
+            self._cache_ttl = 0
+        # small in-memory lock per cache file to avoid races
+        self._cache_locks = {}
 
     def _search(self, url: str, max_results: int, timeout: int) -> SearchResults:
         br = browser()
@@ -135,9 +158,17 @@ class AnnasArchiveStore(StorePlugin):
         url_extension = link_opts.get('url_extension', True)
         content_type = link_opts.get('content_type', False)
 
-        # fetch detail page
-        with closing(urlopen(Request(self._get_url(search_result.detail_item)), timeout=timeout)) as f:
-            doc = html.fromstring(f.read())
+        # fetch detail page (use cache if enabled)
+        detail_url = self._get_url(search_result.detail_item)
+        body = None
+        if self._cache_dir:
+            body = self._cache_get(detail_url)
+        if body is None:
+            with closing(urlopen(Request(detail_url), timeout=timeout)) as f:
+                body = f.read()
+            if self._cache_dir:
+                self._cache_set(detail_url, body)
+        doc = html.fromstring(body)
 
         # select all anchors under the downloads panel. Some mirrors/pages don't include
         # the 'js-download-link' class server-side, so be permissive and filter later.
@@ -195,9 +226,22 @@ class AnnasArchiveStore(StorePlugin):
                 return link_text, abs_href
 
             try:
-                with closing(urlopen(Request(abs_href), timeout=timeout)) as resp:
-                    doc2 = html.fromstring(resp.read())
-                    base2 = resp.geturl()
+                # use cache for provider pages too when enabled
+                if self._cache_dir:
+                    raw = self._cache_get(abs_href)
+                    if raw is not None:
+                        doc2 = html.fromstring(raw)
+                        base2 = abs_href
+                    else:
+                        with closing(urlopen(Request(abs_href), timeout=timeout)) as resp:
+                            raw = resp.read()
+                            base2 = resp.geturl()
+                        doc2 = html.fromstring(raw)
+                        self._cache_set(abs_href, raw)
+                else:
+                    with closing(urlopen(Request(abs_href), timeout=timeout)) as resp:
+                        doc2 = html.fromstring(resp.read())
+                        base2 = resp.geturl()
 
                     # first, try to find explicit download link
                     found = find_download_in_doc(doc2, base2)
@@ -372,3 +416,71 @@ class AnnasArchiveStore(StorePlugin):
 
     def save_settings(self, config_widget):
         config_widget.save_settings()
+
+    # --- simple persistent cache helpers ---
+    def _cache_path_for_url(self, url: str) -> str:
+        if not self._cache_dir:
+            return None
+        # use sha256(url) for filename
+        h = hashlib.sha256(url.encode('utf-8')).hexdigest()
+        return os.path.join(self._cache_dir, h[:2], h)
+
+    def _ensure_cache_dir_for_path(self, path: str):
+        d = os.path.dirname(path)
+        os.makedirs(d, exist_ok=True)
+
+    def _cache_get(self, url: str):
+        path = self._cache_path_for_url(url)
+        if not path:
+            return None
+        # simple lock per file
+        lock = self._cache_locks.setdefault(path, threading.Lock())
+        with lock:
+            if not os.path.exists(path):
+                return None
+            try:
+                # file format: first line JSON metadata, then a blank line, then raw body
+                with open(path, 'rb') as f:
+                    raw = f.read()
+                # split header/body
+                sep = b"\n\n"
+                if sep in raw:
+                    hdr_raw, body = raw.split(sep, 1)
+                    try:
+                        meta = json.loads(hdr_raw.decode('utf-8'))
+                    except Exception:
+                        return body
+                    # check TTL
+                    if self._cache_ttl > 0:
+                        ts = meta.get('ts', 0)
+                        if int(time.time()) - int(ts) > self._cache_ttl:
+                            try:
+                                os.remove(path)
+                            except Exception:
+                                pass
+                            return None
+                    return body
+                else:
+                    # older format: raw body only
+                    return raw
+            except Exception:
+                return None
+
+    def _cache_set(self, url: str, data: bytes):
+        path = self._cache_path_for_url(url)
+        if not path:
+            return
+        self._ensure_cache_dir_for_path(path)
+        lock = self._cache_locks.setdefault(path, threading.Lock())
+        with lock:
+            try:
+                tmp = path + '.tmp'
+                meta = {'ts': int(time.time()), 'url': url}
+                with open(tmp, 'wb') as f:
+                    f.write(json.dumps(meta).encode('utf-8'))
+                    f.write(b"\n\n")
+                    f.write(data)
+                os.replace(tmp, path)
+            except Exception:
+                # best-effort caching; swallow errors
+                pass
